@@ -208,6 +208,20 @@ def native_test_2(args):
                         comp = [0.0018, 0.0210, 0.0, 0.0230, 0.0255, 0.0266, 0.0352],
                         comp_label='CPU')   
 
+def other_test(args):
+    m = 27648
+    k = 4096
+    n_list = [128, 256, 512]
+    subsavedir = os.path.join(args.output_dir, f'm{m}k{k}')
+    ALU_vs_DPMP_performance(n_list,
+                        args.n_iter,
+                        subsavedir,
+                        args.ignore_moves,
+                        k_spec = k,
+                        m_spec = m,
+                        comp = [0.4490, 0.7197, 1.4375],
+                        comp_label='GPU3(V100)')   
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Compare the performance of \
             Vector-Matrix multiply on ALU vs DPMP")
@@ -247,4 +261,5 @@ if __name__ == "__main__":
     # var_mn_test(args)
     # var_k_test_2(args)
     # native_test(args)
-    native_test_2(args)
+    # native_test_2(args)
+    other_test(args)
