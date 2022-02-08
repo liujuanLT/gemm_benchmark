@@ -14,6 +14,27 @@ from lt_sdk.graph.import_graph import tf_graph_def_importer
 from lt_sdk.visuals import sim_result_to_trace
 fre = 1E6  # clock per ms
 
+def _get_tf_ALU_graph(x, A, n_iter):
+    """
+    Create and return the tensorflow graph def object for a test ALU matmul worklaod
+
+    Args:
+        x: input vector
+        A: input weight matrix
+        n_iter: number of desired iterations
+
+    Return:
+        Tensorflow graph_def object
+    """
+    g = tf.Graph()
+    with g.as_default():
+        x_t = tf.compat.v1.placeholder(tf.float32, shape=x.shape, name="x")
+        out_t = ALU.ALU_vec_matmul_early_transpose(x_t, A)
+        for i in range(1, n_iter):
+            out_t = ALU.ALU_vec_matmul_early_transpose(out_t, A)
+
+    return g.as_graph_def()
+
 def _get_tf_DPMP_graph(x, A, n_iter):
     """
     Create and return the tensorflow graph def object for a test DPMP matmul worklaod
@@ -30,10 +51,11 @@ def _get_tf_DPMP_graph(x, A, n_iter):
     with g.as_default():
         x_t = tf.compat.v1.placeholder(tf.float32, shape=x.shape, name="x")
         A_t = tf.constant(A.astype(np.float32), name="A")
-        for _ in range(n_iter):
-            out_t = tf.matmul(x_t, A_t)
-        #for _ in range(1, n_iter):
-         #i#   out_t = tf.matmul(out_t, A_t)
+        # for _ in range(n_iter):
+        #     out_t = tf.matmul(x_t, A_t)
+        out_t = tf.matmul(x_t, A_t)
+        for _ in range(1, n_iter):
+            out_t = tf.matmul(out_t, A_t)
 
     return g.as_graph_def()
 
@@ -82,7 +104,7 @@ def save_to_csv(comp_label, lines, output_path=None):
             csv_writer.writerow(line)
     print(f'saved to {out_file}')
 
-def ALU_vs_DPMP_performance(matrix_sizes, n_iter, output_dir, ignore_moves, m_spec=None, n_spec=None, k_spec=None, comp=None, comp_label='GPU'):
+def DPMP_performance(matrix_sizes, n_iter, output_dir, ignore_moves, m_spec=None, n_spec=None, k_spec=None, comp=None, comp_label='GPU'):
     DPMP_runtimes = []
     output_path = Path(output_dir)
     trace_path = output_path / Path("traces/")
@@ -141,11 +163,89 @@ def ALU_vs_DPMP_performance(matrix_sizes, n_iter, output_dir, ignore_moves, m_sp
         print(s)
     save_to_csv(comp_label, lines, output_path=output_path)
 
+def ALU_vs_DPMP_performance(mlist, nlist, klist, n_iter, output_dir, ignore_moves):
+    ALU_runtimes, DPMP_runtimes = [], []
+    output_path = Path(output_dir)
+    trace_path = output_path / Path("traces/")
+    trace_path.mkdir(parents=True, exist_ok=True)
+
+    for m, n, k in zip(mlist, nlist, klist):
+        x = np.random.rand(m, k).astype(np.float32)
+        A = np.random.rand(k, n).astype(np.float32)
+
+        # --- Compute using ALU on Dagger (bloat16)
+        ALU_config = light_config.get_default_config(
+            hw_cfg=light_config.hardware_configs_pb2.DAGGER,
+            graph_type=light_config.graph_types_pb2.TFGraphDef)
+        ALU_graph = tf_graph_def_importer.ImportTFGraphDef(None,
+                                                           ALU_config.sw_config,
+                                                           graph_def=_get_tf_ALU_graph(
+                                                               x,
+                                                               A,
+                                                               n_iter)).as_light_graph()
+        light_graph = api.transform_graph(ALU_graph, ALU_config)
+        execution_stats = api.run_performance_simulation(light_graph, ALU_config)
+        if ignore_moves:
+            max_clock = 0
+            for instruction in execution_stats.instructions:
+                operation = instruction.instruction.node.WhichOneof("node")
+                if operation != "move":
+                    max_clock = max(instruction.start_clk + instruction.duration_clks,
+                                    max_clock)
+            ALU_runtimes.append(max_clock)
+        else:
+            ALU_runtimes.append(execution_stats.total_clocks)        
+
+        # --- Compute using DPMP on Dagger (int32)
+        DPMP_config = light_config.get_default_config(
+            hw_cfg=light_config.hardware_configs_pb2.DAGGER,
+            graph_type=light_config.graph_types_pb2.TFGraphDef)
+        DPMP_graph = tf_graph_def_importer.ImportTFGraphDef(
+            None,
+            DPMP_config.sw_config,
+            graph_def=_get_tf_DPMP_graph(x,
+                                         A,
+                                         n_iter)).as_light_graph()
+        light_graph = api.transform_graph(DPMP_graph, DPMP_config)
+        execution_stats = api.run_performance_simulation(light_graph, DPMP_config)
+        if ignore_moves:
+            max_clock = 0
+            for instruction in execution_stats.instructions:
+                operation = instruction.instruction.node.WhichOneof("node")
+                if operation != "move":
+                    max_clock = max(instruction.start_clk + instruction.duration_clks,
+                                    max_clock)
+            DPMP_runtimes.append(max_clock)
+        else:
+            DPMP_runtimes.append(execution_stats.total_clocks)
+
+        filename = "output_DPMP_matrix_m{}xn{}xk{}_niter{}.trace".format(m, n, k, n_iter)
+        save_path = trace_path / filename
+        sim_result_to_trace.instruction_trace(save_path,
+                                              execution_stats,
+                                              DPMP_config.hw_specs,
+                                              DPMP_config.sim_params)
+    ALU_runtimes = [ v/fre for v in ALU_runtimes ] # clocks to duration
+    DPMP_runtimes = [ v/fre for v in DPMP_runtimes ] # clocks to duration
+    lines = []
+    comp_label = 'ALU'
+    s = f'm, n, k, {comp_label}, DPMP'
+    lines.append(['m', 'n', 'k', comp_label, 'DPMP'])
+    print(s)
+    for i in range(len(mlist)):
+        m = mlist[i]
+        n = nlist[i]
+        k = klist[i]
+        s = f'{m}, {n}, {k}, {ALU_runtimes[i]}, {DPMP_runtimes[i]}'
+        lines.append([m, n, k, ALU_runtimes[i], DPMP_runtimes[i]])
+        print(s)
+    save_to_csv(comp_label, lines, output_path=output_path)    
+
 def var_k_test_1(args):
     k_list = [1024] # [list(range(1008, 1025))]
     m = n = 1024
     subsavedir = os.path.join(args.output_dir, f'mn{m}')
-    ALU_vs_DPMP_performance(k_list,
+    DPMP_performance(k_list,
                         args.n_iter,
                         subsavedir,
                         args.ignore_moves,
@@ -159,7 +259,7 @@ def var_mn_test(args):
     mn_list = [2**n for n in range(5, 14)]
     k = 4096
     subsavedir = os.path.join(args.output_dir, f'k{k}')
-    ALU_vs_DPMP_performance(mn_list,
+    DPMP_performance(mn_list,
                         args.n_iter,
                         subsavedir,
                         args.ignore_moves,
@@ -172,7 +272,7 @@ def var_k_test_2(args):
     k_list = [2**n for n in range(5, 14)]
     m = n = 4096
     subsavedir = os.path.join(args.output_dir, f'mn{m}')
-    ALU_vs_DPMP_performance(k_list,
+    DPMP_performance(k_list,
                         args.n_iter,
                         subsavedir,
                         args.ignore_moves,
@@ -185,7 +285,7 @@ def native_test(args):
     kn_list = [2**n for n in range(6,12)]
     m = 1
     subsavedir = os.path.join(args.output_dir, f'm{m}')
-    ALU_vs_DPMP_performance(kn_list,
+    DPMP_performance(kn_list,
                         args.n_iter,
                         subsavedir,
                         args.ignore_moves,
@@ -199,28 +299,63 @@ def native_test_2(args):
     k = 64
     n = 256
     subsavedir = os.path.join(args.output_dir, f'k{k}n{n}')
-    ALU_vs_DPMP_performance(m_list,
+    DPMP_performance(m_list,
                         args.n_iter,
                         subsavedir,
                         args.ignore_moves,
                         k_spec = k,
                         n_spec = n,
                         comp = [0.0018, 0.0210, 0.0, 0.0230, 0.0255, 0.0266, 0.0352],
-                        comp_label='CPU')   
+                        comp_label='CPU')
 
 def other_test(args):
     m = 27648
     k = 4096
     n_list = [128, 256, 512]
     subsavedir = os.path.join(args.output_dir, f'm{m}k{k}')
-    ALU_vs_DPMP_performance(n_list,
+    DPMP_performance(n_list,
                         args.n_iter,
                         subsavedir,
                         args.ignore_moves,
                         k_spec = k,
                         m_spec = m,
                         comp = [0.4490, 0.7197, 1.4375],
-                        comp_label='GPU3(V100)')   
+                        comp_label='GPU3(V100)')
+
+def squreA_test(args):
+    m_list = [1, 64, 128, 256, 512, 1024, 2048]
+    for m in m_list:
+        k_list = n_list = [64, 128, 256, 512, 1024, 2048]
+        subsavedir = os.path.join(args.output_dir, f'squreA_m{m}')
+        DPMP_performance(k_list,
+                        args.n_iter,
+                        subsavedir,
+                        args.ignore_moves,
+                        m_spec = m,
+                        comp = [0] * len(k_list),
+                        comp_label='unknown')
+
+def smallsize_test(args):
+    #m_list = [1,1,1,1,1,1]
+    #n_list = k_list = [64, 128, 256, 512, 1024, 2048]
+    sizelist = [1,2,4,8,16,32,64]
+    m_list = []
+    k_list = []
+    n_list = []
+    for m in sizelist:
+        for k in sizelist:
+            for n in sizelist:
+                m_list.append(m)
+                k_list.append(k)
+                n_list.append(n)         
+    subsavedir = os.path.join(args.output_dir, f'smallsize')
+    ALU_vs_DPMP_performance(m_list,
+                            n_list,
+                            k_list,
+                            args.n_iter,
+                            subsavedir,
+                            args.ignore_moves)                     
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Compare the performance of \
@@ -255,11 +390,17 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     args.n_iter = 1
+    args.ignore_moves = False
+    args.output_dir = f'/home/jliu/codes/data/niter{args.n_iter}_ignoremoves{args.ignore_moves}'
+    smallsize_test(args)
     args.ignore_moves = True
     args.output_dir = f'/home/jliu/codes/data/niter{args.n_iter}_ignoremoves{args.ignore_moves}'
+    smallsize_test(args)    
+    # squreA_test(args)
     # var_k_test_1(args)
     # var_mn_test(args)
     # var_k_test_2(args)
     # native_test(args)
     # native_test_2(args)
-    other_test(args)
+    # other_test(args)
+   
