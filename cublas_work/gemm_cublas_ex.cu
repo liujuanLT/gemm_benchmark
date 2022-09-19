@@ -139,8 +139,7 @@ void warmUp ()
   cublasCreate(&cublasHandle); // takes hundrads of milliseconds for first time
 
   // cudaMemcpy
-  float* h_data(NULL);
-  cudaMallocHost(&h_data, sizeof(float) * N);
+  float* h_data = (float*) malloc(sizeof(float) * N);
   for (int i = 0; i < N; ++ i) h_data[i] = 1.0f * i;
   float* d_data(NULL);
   cudaMalloc((void**)&d_data, sizeof(float) * N);
@@ -148,7 +147,7 @@ void warmUp ()
   cudaMemcpyAsync(h_data, d_data, sizeof(float) * N, cudaMemcpyDeviceToHost, stream1);
   for (int i = 0; i < N; ++ i) assert(h_data[i] == 1.0f * i);
   cudaStreamSynchronize(stream1);
-  cudaFreeHost(h_data);
+  free(h_data);
   cudaFree(d_data);
 }
 
@@ -163,9 +162,9 @@ int run(int m, int k, int n, uint64_t niters) {
     cudaMalloc((void**) &d_B, sizeof(datatypeB) * k * n);
     cudaMalloc((void**) &d_C, sizeof(datatypeC) * m * n);
     cudaMemset(d_C, 0, sizeof(datatypeC) * m * n);
-    init_vector(d_A, m * k);
-    init_vector(d_B, k * n);
-    init_vector(d_A, m * n);
+    // init_vector(d_A, m * k);
+    // init_vector(d_B, k * n);
+    // init_vector(d_A, m * n);
 
 #if LOG_LEVEL >= 2
     cout << "A:" << endl;
@@ -299,8 +298,8 @@ int main(int argc, const char **argv) {
     #endif
 
     cutlass::CommandLine cmd(argc, argv);
-    int m = 2, k = 3, n = 2;
-    uint64_t niters = 1;
+    int m = 64, k = 64, n = 256;
+    uint64_t niters = 10;
     cmd.get_cmd_line_argument("m", m);
     cmd.get_cmd_line_argument("k", k);        
     cmd.get_cmd_line_argument("n", n);
