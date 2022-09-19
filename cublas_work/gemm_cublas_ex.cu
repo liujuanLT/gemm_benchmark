@@ -17,7 +17,7 @@
 using namespace std;
 
 #ifndef DATA_TYPE
-#define DATA_TYPE 2  // 0: float, 1: half, 1:int8
+#define DATA_TYPE 2 // 0: float, 1: half, 2:int8-int32, 3:int8-fp32
 #endif
 
 #if DATA_TYPE == 0
@@ -28,10 +28,14 @@ using namespace std;
     using datatypeA = __half;
     using datatypeB = __half;
     using datatypeC = __half;
-#else
-    using datatypeA = char;
+#elif DATA_TYPE == 2
+    using datatypeA = char; // int cutlass, define int8_t as char
     using datatypeB = char;
-    using datatypeC = int;
+    using datatypeC = int; // or int
+#elif DATA_TYPE == 3
+    using datatypeA = char; // int cutlass, define int8_t as char
+    using datatypeB = char;
+    using datatypeC = float;    
 #endif
 
 // void init_vector(float* d_data, int len) {
@@ -176,8 +180,15 @@ int run(int m, int k, int n, uint64_t niters) {
     cublasHandle_t handle;
     cublasCreate(&handle);
 #if DATA_TYPE == 2
-    int alpha = 1;
-    int beta = 0;
+    datatypeC alpha = 1;
+    datatypeC beta = 0;
+    // cublasGemmAlgo_t algo = CUBLAS_GEMM_DEFAULT;
+    // cublasGemmAlgo_t algo = CUBLAS_GEMM_ALGO5;
+    cublasGemmAlgo_t algo = CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+    cout << "algo:" << algo << endl;
+#elif DATA_TYPE == 3
+    datatypeC alpha = 1;
+    datatypeC beta = 0;
     // cublasGemmAlgo_t algo = CUBLAS_GEMM_DEFAULT;
     // cublasGemmAlgo_t algo = CUBLAS_GEMM_ALGO5;
     cublasGemmAlgo_t algo = CUBLAS_GEMM_DEFAULT_TENSOR_OP;
@@ -220,7 +231,11 @@ int run(int m, int k, int n, uint64_t niters) {
         #elif DATA_TYPE == 2
             cublasGemmEx(handle, transA, transB, (int)m, (int)n, (int)k, 
                 &alpha, d_A, CUDA_R_8I, (int)lda, d_B, CUDA_R_8I, (int)ldb, &beta, 
-                d_C, CUDA_R_32I, (int)ldc, CUDA_R_32I, algo);    
+                d_C, CUDA_R_32I, (int)ldc, CUBLAS_COMPUTE_32I, algo);
+        #elif DATA_TYPE == 3
+            cublasGemmEx(handle, transA, transB, (int)m, (int)n, (int)k, 
+                &alpha, d_A, CUDA_R_8I, (int)lda, d_B, CUDA_R_8I, (int)ldb, &beta, 
+                d_C, CUDA_R_32F, (int)ldc, CUBLAS_COMPUTE_32F, algo);
         #endif
       }
 
