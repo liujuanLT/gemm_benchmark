@@ -38,6 +38,17 @@ using namespace std;
     using datatypeC = float;    
 #endif
 
+
+// cublas API error checking
+#define CUBLAS_CHECK(err)                                                                          \
+    do {                                                                                           \
+        cublasStatus_t err_ = (err);                                                               \
+        if (err_ != CUBLAS_STATUS_SUCCESS) {                                                       \
+            std::printf("cublas error %d at %s:%d\n", err_, __FILE__, __LINE__);                   \
+            throw std::runtime_error("cublas error");                                              \
+        }                                                                                          \
+    } while (0)
+
 // void init_vector(float* d_data, int len) {
 //     // a rough piece of code considering no performance 
 //     float* h_data;
@@ -229,13 +240,13 @@ int run(int m, int k, int n, uint64_t niters) {
             cout << "not implemented" << endl;
             exit(0);
         #elif DATA_TYPE == 2
-            cublasGemmEx(handle, transA, transB, (int)m, (int)n, (int)k, 
+            CUBLAS_CHECK(cublasGemmEx(handle, transA, transB, (int)m, (int)n, (int)k, 
                 &alpha, d_A, CUDA_R_8I, (int)lda, d_B, CUDA_R_8I, (int)ldb, &beta, 
-                d_C, CUDA_R_32I, (int)ldc, CUBLAS_COMPUTE_32I, algo);
+                d_C, CUDA_R_32I, (int)ldc, CUBLAS_COMPUTE_32I, algo));
         #elif DATA_TYPE == 3
-            cublasGemmEx(handle, transA, transB, (int)m, (int)n, (int)k, 
+            CUBLAS_CHECK(cublasGemmEx(handle, transA, transB, (int)m, (int)n, (int)k, 
                 &alpha, d_A, CUDA_R_8I, (int)lda, d_B, CUDA_R_8I, (int)ldb, &beta, 
-                d_C, CUDA_R_32F, (int)ldc, CUBLAS_COMPUTE_32F, algo);
+                d_C, CUDA_R_32F, (int)ldc, CUBLAS_COMPUTE_32F, algo));
         #endif
       }
 
